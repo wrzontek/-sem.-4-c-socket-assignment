@@ -6,6 +6,7 @@
 #include <netinet/in.h>
 #include <unistd.h>
 #include <fstream>
+#include <utility>
 #include <vector>
 #include <iterator>
 
@@ -14,8 +15,11 @@ namespace fs = std::filesystem;
 #define DEFAULT_PORT 8080
 
 struct correlated_resource {
-    fs::path path_to_file;
-    // ip
+    correlated_resource(std::string &path, std::string &ip, int port):
+                        path(std::move(path)), ip(std::move(ip)), port(port) {}
+
+    fs::path path;
+    std::string ip;
     int port;
 };
 
@@ -45,20 +49,23 @@ int main(int argc, char *argv[]) {
 
     std::ifstream servers_file (path_to_servers_file);
     std::string line;
-    std::vector<correlated_resource> correlated_resources;
+    std::vector<correlated_resource> correlated_resources;  // lepiej set sortowany po zasobie ale nie trzeba
 
     if (servers_file.is_open()) {
         std::string path, ip, port;
         while ( getline (servers_file,line) ) {
             std::stringstream ss = std::stringstream(line);
             ss >> path >> ip >> port;
-            //TODO zrobić z tego structy i dodać do vektora
-            std::cout << "path: " << path << " ip: " << ip << " port: " << port << std::endl;
+            correlated_resources.emplace_back(path, ip, atoi(port.c_str()));
         }
         servers_file.close();
     }
     else {
         return EXIT_FAILURE;
+    }
+
+    for (correlated_resource &r : correlated_resources) {
+        std::cout << "path: " << r.path << " ip: " << r.ip << " port: " << r.port << std::endl;
     }
 
     printf("my port: %d\n", my_port);
