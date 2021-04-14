@@ -9,20 +9,22 @@
 #include <utility>
 #include <vector>
 #include <iterator>
+#include <regex>
 
 namespace fs = std::filesystem;
 
 #define DEFAULT_PORT 8080
 
-struct correlated_resource {
-    correlated_resource(std::string &path, std::string &ip, int port):
-                        path(std::move(path)), ip(std::move(ip)), port(port) {}
+namespace {
+    struct correlated_resource {
+        correlated_resource(std::string &path, std::string &ip, int port) :
+                path(std::move(path)), ip(std::move(ip)), port(port) {}
 
-    fs::path path;
-    std::string ip;
-    int port;
-};
-
+        fs::path path;
+        std::string ip;
+        int port;
+    };
+}
 //for (const auto & entry : fs::directory_iterator(fs::current_path()))
 //    std::cout << entry.path() << std::endl;
 
@@ -33,7 +35,7 @@ int main(int argc, char *argv[]) {
     int my_port = DEFAULT_PORT;
 
     if (argc == 4)
-        my_port = atoi(argv[3]);
+        my_port = atoi(argv[3]);            // nie wykrywa błędów
 
     fs::path path_to_dir = argv[1];
     fs::path path_to_servers_file = argv[2];
@@ -69,6 +71,13 @@ int main(int argc, char *argv[]) {
     }
 
     printf("my port: %d\n", my_port);
+
+    // teraz otwieramy gniazdo i czekamy na połączenie
+    static const std::regex request_line(R"((GET|HEAD) [a-zA-Z0-9.-/]+ (?:HTTP\/1.1)\r\n)");
+    std::string test("GET plik HTTP/1.1\r\n");
+
+    if (std::regex_search(test, request_line))
+        std::cout << "found\n";
 
     return 0;
 }
