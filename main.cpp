@@ -163,7 +163,7 @@ int main(int argc, char *argv[]) {
                 if (!std::regex_match(line, request_line_regex)) {
                     std::string response = "HTTP/1.1 400 invalid_request_line\r\n";
                     snd_len = write(msg_sock, response.c_str(), response.length());
-                    if (snd_len != len)
+                    if (snd_len != response.length())
                         return EXIT_FAILURE;
                     break;
                 }
