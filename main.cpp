@@ -177,6 +177,7 @@ int main(int argc, char *argv[]) {
                         std::cout << "token: " << token << std::endl;
                     }
                     if (line_tokens[0] != "GET" && line_tokens[0] != "HEAD") {
+                        // TODO do wytestowania
                         std::string response = "HTTP/1.1 501 unsupported_method\r\n";
                         snd_len = write(msg_sock, response.c_str(), response.length());
                         if (snd_len != response.length())
