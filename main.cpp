@@ -15,6 +15,13 @@ namespace fs = std::filesystem;
 
 #define DEFAULT_PORT 8080
 
+#define OK 200
+#define OTHER_SERVER 302
+#define INVALID_REQUEST 400
+#define NOT_FOUND 404
+#define SERVER_ERROR 500
+#define UNSUPPORTED_OPERATION 501
+
 namespace {
     struct correlated_resource {
         correlated_resource(std::string &path, std::string &ip, int port) :
@@ -63,28 +70,26 @@ int main(int argc, char *argv[]) {
         }
         servers_file.close();
     }
-    else {
+    else
         return EXIT_FAILURE;
-    }
 
-    for (correlated_resource &r : correlated_resources) {
+    for (correlated_resource &r : correlated_resources)
         std::cout << "path: " << r.path << " ip: " << r.ip << " port: " << r.port << std::endl;
-    }
 
     printf("my port: %d\n", my_port);
 
-    // teraz otwieramy gniazdo i czekamy na połączenie
-    static const std::regex request_line(R"((GET|HEAD) [a-zA-Z0-9.-/]+ (HTTP\/1.1)\r\n)");
-
+    // przygotowujemy przydatne regexy
+    static const std::regex request_line(R"(\w+ /[a-zA-Z0-9.-/]+ (HTTP\/1.1)\r\n)");
+    // ^^^ potem sprawdzamy czy GET|HEAD
     static const std::regex status_line(R"((HTTP\/1.1) \d{3} \w+\r\n)");
 
-    static const std::regex header_field(R"(((Connection: *close *)|(Content-Length: *\d+ *))\r\n)");
+    static const std::regex header_field(R"(((Connection: *close *)|(Content-Length: *\d+ *))\r\n)", std::regex::icase);
 
     static const std::regex empty_line("\r\n");
 
-    std::string test1("GET plik HTTP/1.1\r\n");
+    std::string test1("GET /plik HTTP/1.1\r\n");
     std::string test2("HTTP/1.1 404 niema\r\n");
-    std::string test3("Connection: close\r\n");
+    std::string test3("CoNNection: close\r\n");
     std::string test4("\r\n");
     if (std::regex_match(test1, request_line))
         std::cout << "match 1\n";
@@ -94,6 +99,8 @@ int main(int argc, char *argv[]) {
         std::cout << "match 3\n";
     if (std::regex_match(test4, empty_line))
         std::cout << "match 4\n";
+
+
 
     return 0;
 }
