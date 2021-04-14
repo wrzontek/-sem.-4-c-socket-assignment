@@ -34,9 +34,10 @@ int main(int argc, char *argv[]) {
 
     int my_port = DEFAULT_PORT;
 
-    if (argc == 4)
-        my_port = atoi(argv[3]);            // nie wykrywa błędów
-
+    if (argc == 4) {
+        std::string port_num_string(argv[3]);
+        my_port = std::stoi(port_num_string);
+    }
     fs::path path_to_dir = argv[1];
     fs::path path_to_servers_file = argv[2];
 
@@ -73,11 +74,22 @@ int main(int argc, char *argv[]) {
     printf("my port: %d\n", my_port);
 
     // teraz otwieramy gniazdo i czekamy na połączenie
-    static const std::regex request_line(R"((GET|HEAD) [a-zA-Z0-9.-/]+ (?:HTTP\/1.1)\r\n)");
-    std::string test("GET plik HTTP/1.1\r\n");
+    static const std::regex request_line(R"((GET|HEAD) [a-zA-Z0-9.-/]+ (HTTP\/1.1)\r\n)");
 
-    if (std::regex_search(test, request_line))
-        std::cout << "found\n";
+    static const std::regex status_line(R"((HTTP\/1.1) \d{3} \w+\r\n)");
+
+    static const std::regex header_field(R"(((Connection: *close *)|(Content-Length: *\d+ *))\r\n)");
+
+    std::string test1("GET plik HTTP/1.1\r\n");
+    std::string test2("HTTP/1.1 404 niema\r\n");
+    std::string test3("Connection: close\r\n");
+    if (std::regex_match(test1, request_line))
+        std::cout << "match 1\n";
+    if (std::regex_match(test2, status_line))
+        std::cout << "match 2\n";
+    if (std::regex_match(test3, header_field))
+        std::cout << "match 3\n";
+
 
     return 0;
 }
