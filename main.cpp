@@ -177,14 +177,12 @@ int main(int argc, char *argv[]) {
                         std::cout << "token: " << token << std::endl;
                     }
                     if (line_tokens[0] != "GET" && line_tokens[0] != "HEAD") {
-                        // UNSUPPORTED_OPERATION wysyłamy
+                        std::string response = "HTTP/1.1 501 unsupported_method\r\n";
+                        snd_len = write(msg_sock, response.c_str(), response.length());
+                        if (snd_len != response.length())
+                            return EXIT_FAILURE;
                     }
                 }
-
-                //snd_len = write(msg_sock, buffer, len);
-                //if (snd_len != len)
-                //    return EXIT_FAILURE;
-
             }
 
         } while (len > 0);
