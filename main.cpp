@@ -158,7 +158,10 @@ int main(int argc, char *argv[]) {
                     std::cout << "line[i]: " << token << std::endl;
                 }
                 std::string &line = lines[0];
-                // TODO wczytywanie po linii jak człowiek a nie
+                // TODO przerobić wczytane w pełni linie, jeżeli to zarazem koniec komunikatu i received to git
+                // jak koniec komunikatu ale nie received to lecimy kolejny komunikat
+                // jak koniec received ale nie komunikatu to doczytujemy i kończymy przerabiać,
+                // (może nawet urwać w środku stringa więc dokleić czy cuś)
 
                 if (!std::regex_match(line, request_line_regex)) {
                     std::string response = "HTTP/1.1 400 invalid_request_line\r\n";
