@@ -80,16 +80,20 @@ int main(int argc, char *argv[]) {
 
     static const std::regex header_field(R"(((Connection: *close *)|(Content-Length: *\d+ *))\r\n)");
 
+    static const std::regex empty_line("\r\n");
+
     std::string test1("GET plik HTTP/1.1\r\n");
     std::string test2("HTTP/1.1 404 niema\r\n");
     std::string test3("Connection: close\r\n");
+    std::string test4("\r\n");
     if (std::regex_match(test1, request_line))
         std::cout << "match 1\n";
     if (std::regex_match(test2, status_line))
         std::cout << "match 2\n";
     if (std::regex_match(test3, header_field))
         std::cout << "match 3\n";
-
+    if (std::regex_match(test4, empty_line))
+        std::cout << "match 4\n";
 
     return 0;
 }
