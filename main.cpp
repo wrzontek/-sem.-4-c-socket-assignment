@@ -10,11 +10,12 @@
 #include <vector>
 #include <iterator>
 #include <regex>
+#include <set>
 
 namespace fs = std::filesystem;
 
 #define DEFAULT_PORT 8080
-#define BUFFER_SIZE   2000
+#define BUFFER_SIZE   2048
 #define QUEUE_LENGTH 5
 
 #define OK 200
@@ -23,6 +24,12 @@ namespace fs = std::filesystem;
 #define NOT_FOUND 404
 #define SERVER_ERROR 500
 #define UNSUPPORTED_OPERATION 501
+
+#define GET false
+#define HEAD true
+
+#define IMMEDIATE 1
+#define AFTER_RESPONSE 2
 
 namespace {
     struct correlated_resource {
@@ -45,7 +52,6 @@ namespace {
         return tokens;
     }
 
-
     std::string my_getline(std::string &buf_str) {
         std::size_t pos = buf_str.find("\r\n");
         if (pos == std::string::npos) {
@@ -55,6 +61,32 @@ namespace {
         std::string line = buf_str.substr(0, pos + 2);
         buf_str.erase(0, pos + 2);
         return line;
+    }
+
+    std::string my_peek_line(std::string &buf_str) {
+        std::size_t pos = buf_str.find("\r\n");
+        if (pos == std::string::npos) {
+            std::cout << "nie ma \\r\\n !\n";
+            // trzeba doczytać bądź jest zły input
+        }
+        std::string line = buf_str.substr(0, pos + 2);
+        return line;
+    }
+
+    bool send_invalid_request_error(int msg_sock, std::string error_msg) {
+        std::string response = "HTTP/1.1 400 " + error_msg + "\r\n";
+        ssize_t snd_len = write(msg_sock, response.c_str(), response.length());
+        if (snd_len != response.length())
+            return 1;
+        return 0;
+    }
+
+    bool send_unsupported_method_error(int msg_sock) {
+        std::string response = "HTTP/1.1 501 unsupported_method\r\n";
+        ssize_t snd_len = write(msg_sock, response.c_str(), response.length());
+        if (snd_len != response.length())
+            return 1;
+        return 0;
     }
 }
 //for (const auto & entry : fs::directory_iterator(fs::current_path()))
@@ -108,22 +140,19 @@ int main(int argc, char *argv[]) {
     // ^^^ potem sprawdzamy czy GET|HEAD
     //static const std::regex status_line_regex(R"((HTTP\/1.1) \d{3} \w+\r\n)");
 
-    static const std::regex header_field_regex(R"(((Connection: *close *)|(Content-Length: *\d+ *))\r\n)", std::regex::icase);
+    //static const std::regex header_field_regex(R"(((Connection: *close *)|(Content-Length: *\d+ *))\r\n)", std::regex::icase);
+    static const std::regex header_field_regex(R"([a-zA-Z0-9.-/-]+: *[a-zA-Z0-9.-/-]+ *\r\n)");
 
-    static const std::regex empty_line_regex("\r");
 
     std::string test1("GET /plik HTTP/1.1\r\n");
     std::string test2("HTTP/1.1 404 niema\r\n");
     std::string test3("CoNNection: close\r\n");
-    std::string test4("\r\n");
     if (std::regex_match(test1, request_line_regex))
         std::cout << "match 1\n";
     //if (std::regex_match(test2, status_line_regex))
     //    std::cout << "match 2\n";
     if (std::regex_match(test3, header_field_regex))
         std::cout << "match 3\n";
-    if (std::regex_match(test4, empty_line_regex))
-        std::cout << "match 4\n";
 
     int sock, msg_sock;
     struct sockaddr_in server_address;
@@ -162,36 +191,71 @@ int main(int argc, char *argv[]) {
             }
             // if len == 0 to koniec połączenia
             else if (len > 0) {
-                //std::stringstream ss(buffer);
-                //std::string line;
                 std::string buf_str(buffer, len);
 
                 std::string line = my_getline(buf_str);
-                // TODO przerobić wczytane w pełni linie, jeżeli to zarazem koniec komunikatu i received to git
+                //  przerobić wczytane w pełni linie, jeżeli to zarazem koniec komunikatu i received to git
                 // jak koniec komunikatu ale nie received to lecimy kolejny komunikat
                 // jak koniec received ale nie komunikatu to doczytujemy i kończymy przerabiać,
                 // (może nawet urwać w środku stringa więc dokleić czy cuś)
 
                 if (!std::regex_match(line, request_line_regex)) {
-                    std::string response = "HTTP/1.1 400 invalid_request_line\r\n";
-                    snd_len = write(msg_sock, response.c_str(), response.length());
-                    if (snd_len != response.length())
+                    if (send_invalid_request_error(msg_sock, "invalid_request_line") != 0)
                         return EXIT_FAILURE;
                     break;
                 }
                 else {
-                    std::cout << "GIT\n";
+                    std::cout << "GIT: " << line;
                     std::vector<std::string> line_tokens = tokenize_string(line, ' ');
-                    for (std::string &token : line_tokens) {
-                        std::cout << "token: " << token << std::endl;
-                    }
+                    //            for (std::string &token : line_tokens) {
+                    //                std::cout << "token: " << token << std::endl;
+                    //            }
+
                     if (line_tokens[0] != "GET" && line_tokens[0] != "HEAD") {
-                        // TODO do wytestowania
-                        std::string response = "HTTP/1.1 501 unsupported_method\r\n";
-                        snd_len = write(msg_sock, response.c_str(), response.length());
-                        if (snd_len != response.length())
+                        if (send_unsupported_method_error(msg_sock) != 0)
                             return EXIT_FAILURE;
                     }
+                    int end_connection = false;
+                    bool method = HEAD;
+                    if (line_tokens[0] == "GET")
+                        method = GET;
+                    fs::path file_path(line_tokens[1]);
+                    // mamy metodę i nazwę pliku, teraz czytamy headery
+                    std::set<std::string> seen_fields;
+                    while (true) {
+                        line = my_getline(buf_str);
+                        if (line == "\r\n")
+                            break;  // koniec headerów
+                        if (!std::regex_match(line, header_field_regex)) {
+                            if (send_invalid_request_error(msg_sock, "invalid_header_field") != 0)
+                                return EXIT_FAILURE;
+                            end_connection = IMMEDIATE;
+                            break;
+                        }
+                        std::transform(line.begin(), line.end(), line.begin(),
+                                       [](unsigned char c){ return std::tolower(c); });
+
+                        line_tokens = tokenize_string(line, ' ');
+                        if (seen_fields.find(line_tokens[0]) != seen_fields.end()) {
+                            if (send_invalid_request_error(msg_sock, "repeat_field_name") != 0)
+                                return EXIT_FAILURE;
+                            end_connection = IMMEDIATE;
+                            break;
+                        }
+                        seen_fields.insert(line_tokens[0]);
+                        if (line_tokens[0] == "connection:" && line_tokens[1] == "close")
+                            end_connection = AFTER_RESPONSE;
+                        if (line_tokens[0] == "content-length:" && line_tokens[1] != "0") {
+                            if (send_invalid_request_error(msg_sock, "non_empty_message_body") != 0)
+                                return EXIT_FAILURE;
+                            end_connection = IMMEDIATE;
+                            break;
+                        }
+                        // TODO moze "server" daje error, moze tez content-type
+                    }
+                    if (end_connection == IMMEDIATE)
+                        break;
+                    std::cout << "GICIK TU\n";
                 }
             }
 
