@@ -37,15 +37,15 @@ namespace {
     static const std::regex header_field_regex(R"([a-zA-Z0-9.-/-]+: *[a-zA-Z0-9.-/-]+ *\r\n)");
 
     struct correlated_resource {
-        correlated_resource(std::string &path, std::string &ip, int port) :
-                path(std::move(path)), ip(std::move(ip)), port(port) {}
+        correlated_resource(std::string &path, std::string &ip, std::string &port) :
+                path(std::move(path)), ip(std::move(ip)), port(std::move(port)) {}
 
-        fs::path path;
+        std::string path;
         std::string ip;
-        int port;
+        std::string port;
     };
 
-    std::vector<std::string> tokenize_string(const std::string& s, const char delimeter) {
+    std::vector<std::string> tokenize_string(const std::string &s, const char delimeter) {
         std::vector<std::string> tokens;
         std::string token;
         std::istringstream tokenStream(s);
@@ -71,22 +71,17 @@ namespace {
         std::size_t pos = buf_str.find("\r\n");
         if (pos == std::string::npos) {
             std::cout << "nie ma \\r\\n !\n";
-            // trzeba doczytać bądź jest zły input
+            // TODO trzeba doczytać bądź jest zły input
         }
         std::string line = buf_str.substr(0, pos + 2);
         return line;
     }
 
-    bool send_invalid_request_error(int msg_sock, std::string error_msg) {
-        std::string response = "HTTP/1.1 400 " + error_msg + "\r\nConnection: close\r\n\r\n";
-        ssize_t snd_len = write(msg_sock, response.c_str(), response.length());
-        if (snd_len != response.length())
-            return EXIT_FAILURE;
-        return 0;
-    }
+    bool send_error(int msg_sock, std::string error_msg, std::string error_num, bool close_conn) {
+        std::string response = "HTTP/1.1 " + error_num + " "  + error_msg + "\r\n";
+        if (close_conn)
+            response += "Connection: close\r\n\r\n";
 
-    bool send_unsupported_method_error(int msg_sock) {
-        std::string response = "HTTP/1.1 501 unsupported_method\r\n";
         ssize_t snd_len = write(msg_sock, response.c_str(), response.length());
         if (snd_len != response.length())
             return EXIT_FAILURE;
@@ -101,7 +96,7 @@ namespace {
             if (line == "\r\n")
                 break;  // koniec headerów
             if (!std::regex_match(line, header_field_regex)) {
-                if (send_invalid_request_error(msg_sock, "invalid_header_field") != 0)
+                if (send_error(msg_sock, "invalid_header_field", "400", true) != 0)
                     return EXIT_FAILURE;
                 end_connection = IMMEDIATE;
                 break;
@@ -111,7 +106,7 @@ namespace {
 
             std::vector<std::string> line_tokens = tokenize_string(line, ' ');
             if (seen_fields.find(line_tokens[0]) != seen_fields.end()) {
-                if (send_invalid_request_error(msg_sock, "repeat_field_name") != 0)
+                if (send_error(msg_sock, "repeat_field_name", "400", true) != 0)
                     return EXIT_FAILURE;
                 end_connection = IMMEDIATE;
                 break;
@@ -120,7 +115,7 @@ namespace {
             if (line_tokens[0] == "connection:" && line_tokens[1] == "close")
                 end_connection = AFTER_RESPONSE;
             if (line_tokens[0] == "content-length:" && (line_tokens[1] != "0" && line_tokens[1] != "0\r\n")) {
-                if (send_invalid_request_error(msg_sock, "non_empty_message_body") != 0)
+                if (send_error(msg_sock, "non_empty_message_body", "400", true) != 0)
                     return EXIT_FAILURE;
                 end_connection = IMMEDIATE;
                 break;
@@ -155,17 +150,16 @@ int main(int argc, char *argv[]) {
     path_to_dir = fs::absolute(path_to_dir);
     std::cout << path_to_dir << std::endl;
 
-
-    std::ifstream servers_file (path_to_servers_file);
+    std::ifstream servers_file(path_to_servers_file);
     std::string servers_line;
     std::vector<correlated_resource> correlated_resources;  // lepiej set sortowany po zasobie ale nie trzeba
 
     if (servers_file.is_open()) {
         std::string path, ip, port;
-        while ( getline (servers_file, servers_line) ) {
+        while (getline(servers_file, servers_line)) {
             std::stringstream ss = std::stringstream(servers_line);
             ss >> path >> ip >> port;
-            correlated_resources.emplace_back(path, ip, std::stoi(port));
+            correlated_resources.emplace_back(path, ip, port);
         }
         servers_file.close();
     }
@@ -177,11 +171,9 @@ int main(int argc, char *argv[]) {
 
     printf("my port: %d\n", my_port);
 
-    // przygotowujemy przydatne regexy
 
     std::string test1("GET /plik HTTP/1.1\r\n");
-    std::string test2("HTTP/1.1 404 niema\r\n");
-    std::string test3("CoNNection: close\r\n");
+    std::string test2("Connection: close\r\n");
     if (std::regex_match(test1, request_line_regex))
         std::cout << "match 1\n";
     if (std::regex_match(test2, header_field_regex))
@@ -222,7 +214,7 @@ int main(int argc, char *argv[]) {
             if (len < 0) {
                 return EXIT_FAILURE;    // moze inny error i wysylamy do typa coś
             }
-            // if len == 0 to koniec połączenia
+                // if len == 0 to koniec połączenia
             else if (len > 0) {
                 std::string buf_str(buffer, len);
 
@@ -232,24 +224,25 @@ int main(int argc, char *argv[]) {
                 // jak koniec received ale nie komunikatu to doczytujemy i kończymy przerabiać,
                 // (może nawet urwać w środku stringa więc dokleić czy cuś)
 
+                // czyli wszystko poniżej będzie w pętli
                 if (!std::regex_match(line, request_line_regex)) {
-                    if (send_invalid_request_error(msg_sock, "invalid_request_line") != 0)
+                    if (send_error(msg_sock, "invalid_request_line", "400", true) != 0)
                         return EXIT_FAILURE;
                     break;
-                }
-                else {
-                            std::cout << "GIT: " << line;
+                } else {
+                    std::cout << "GIT: " << line;
                     std::vector<std::string> line_tokens = tokenize_string(line, ' ');
 
                     if (line_tokens[0] != "GET" && line_tokens[0] != "HEAD") {
-                        if (send_unsupported_method_error(msg_sock) != 0)
+                        if (send_error(msg_sock, "unsupported_method", "501", false) != 0)
                             return EXIT_FAILURE;
                     }
                     int end_connection = false;
                     bool method = HEAD;
                     if (line_tokens[0] == "GET")
                         method = GET;
-                    fs::path file_path(line_tokens[1]);
+                    //fs::path file(line_tokens[1]);
+                    std::string filestr(line_tokens[1]);
                     // mamy metodę i nazwę pliku, teraz czytamy headery
                     if (handle_headers(buf_str, msg_sock, end_connection) != 0)
                         return EXIT_FAILURE;
@@ -257,9 +250,31 @@ int main(int argc, char *argv[]) {
                     if (end_connection == IMMEDIATE)
                         break;
 
-                    std::cout << "GICIK TU\n";
+                    std::cout << "GICIK PO HEADERACH\n";
+                    fs::path file(path_to_dir.string() + filestr);
+                    //std::cout << file << std::endl;
 
-
+                    if (!fs::exists(file)) {
+                        file = fs::absolute(file);
+                        //std::cout << file << std::endl;
+                        bool found = false;
+                        for (correlated_resource &r : correlated_resources) {
+                            if (r.path == file) {
+                                found = true;
+                                std::string status_line = "HTTP/1.1 302 file_on_other_server\r\n";
+                                std::string headers = "Location: http://" + r.ip + ":" + r.port + r.path + "\r\n\r\n";
+                                std::string response = status_line + headers;
+                                snd_len = write(msg_sock, response.c_str(), response.length());
+                                if (snd_len != response.length())
+                                    return EXIT_FAILURE;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            if (send_error(msg_sock, "file_not_found", "404", false) != 0)
+                                return EXIT_FAILURE;
+                        }
+                    }
                     if (end_connection == AFTER_RESPONSE)
                         break;
                 }
