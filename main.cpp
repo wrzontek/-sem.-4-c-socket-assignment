@@ -44,6 +44,18 @@ namespace {
 
         return tokens;
     }
+
+
+    std::string my_getline(std::string &buf_str) {
+        std::size_t pos = buf_str.find("\r\n");
+        if (pos == std::string::npos) {
+            std::cout << "nie ma \\r\\n !\n";
+            // trzeba doczytać bądź jest zły input
+        }
+        std::string line = buf_str.substr(0, pos + 2);
+        buf_str.erase(0, pos + 2);
+        return line;
+    }
 }
 //for (const auto & entry : fs::directory_iterator(fs::current_path()))
 //    std::cout << entry.path() << std::endl;
@@ -92,11 +104,11 @@ int main(int argc, char *argv[]) {
     printf("my port: %d\n", my_port);
 
     // przygotowujemy przydatne regexy
-    static const std::regex request_line_regex(R"(\w+ /[a-zA-Z0-9.-/]+ (HTTP\/1.1)\r)");  //TODO na koniec \r\n
+    static const std::regex request_line_regex(R"(\w+ /[a-zA-Z0-9.-/]+ (HTTP\/1.1)\r\n)");
     // ^^^ potem sprawdzamy czy GET|HEAD
     //static const std::regex status_line_regex(R"((HTTP\/1.1) \d{3} \w+\r\n)");
 
-    static const std::regex header_field_regex(R"(((Connection: *close *)|(Content-Length: *\d+ *))\r)", std::regex::icase);
+    static const std::regex header_field_regex(R"(((Connection: *close *)|(Content-Length: *\d+ *))\r\n)", std::regex::icase);
 
     static const std::regex empty_line_regex("\r");
 
@@ -139,7 +151,7 @@ int main(int argc, char *argv[]) {
 
     while (true) {
         client_address_len = sizeof(client_address);
-        // get client connection from the socket
+
         msg_sock = accept(sock, (struct sockaddr *) &client_address, &client_address_len);
         if (msg_sock < 0)
             return EXIT_FAILURE;
@@ -152,12 +164,9 @@ int main(int argc, char *argv[]) {
             else if (len > 0) {
                 //std::stringstream ss(buffer);
                 //std::string line;
-                std::string received(buffer, len);
-                std::vector<std::string> lines = tokenize_string(received, '\n');
-                for (std::string &token : lines) {
-                    std::cout << "line[i]: " << token << std::endl;
-                }
-                std::string &line = lines[0];
+                std::string buf_str(buffer, len);
+
+                std::string line = my_getline(buf_str);
                 // TODO przerobić wczytane w pełni linie, jeżeli to zarazem koniec komunikatu i received to git
                 // jak koniec komunikatu ale nie received to lecimy kolejny komunikat
                 // jak koniec received ale nie komunikatu to doczytujemy i kończymy przerabiać,
