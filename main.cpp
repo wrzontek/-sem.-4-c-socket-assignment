@@ -205,11 +205,8 @@ int main(int argc, char *argv[]) {
                     break;
                 }
                 else {
-                    std::cout << "GIT: " << line;
+                            std::cout << "GIT: " << line;
                     std::vector<std::string> line_tokens = tokenize_string(line, ' ');
-                    //            for (std::string &token : line_tokens) {
-                    //                std::cout << "token: " << token << std::endl;
-                    //            }
 
                     if (line_tokens[0] != "GET" && line_tokens[0] != "HEAD") {
                         if (send_unsupported_method_error(msg_sock) != 0)
@@ -245,7 +242,7 @@ int main(int argc, char *argv[]) {
                         seen_fields.insert(line_tokens[0]);
                         if (line_tokens[0] == "connection:" && line_tokens[1] == "close")
                             end_connection = AFTER_RESPONSE;
-                        if (line_tokens[0] == "content-length:" && line_tokens[1] != "0") {
+                        if (line_tokens[0] == "content-length:" && (line_tokens[1] != "0" && line_tokens[1] != "0\r\n")) {
                             if (send_invalid_request_error(msg_sock, "non_empty_message_body") != 0)
                                 return EXIT_FAILURE;
                             end_connection = IMMEDIATE;
