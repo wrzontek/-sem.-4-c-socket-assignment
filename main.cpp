@@ -50,6 +50,9 @@ namespace {
     }
 
     std::string my_getline(std::string &buf_str) {
+        if (buf_str.empty())
+            return buf_str;
+
         std::size_t pos = buf_str.find("\r\n");
         if (pos == std::string::npos) {
             std::cout << "nie ma \\r\\n !\n";
@@ -60,7 +63,7 @@ namespace {
         return line;
     }
 
-    std::string my_peek_line(std::string &buf_str) {
+/*    std::string my_peek_line(std::string &buf_str) {
         std::size_t pos = buf_str.find("\r\n");
         if (pos == std::string::npos) {
             std::cout << "nie ma \\r\\n !\n";
@@ -68,10 +71,10 @@ namespace {
         }
         std::string line = buf_str.substr(0, pos + 2);
         return line;
-    }
+    }*/
 
     bool send_error(int msg_sock, std::string error_msg, std::string error_num, bool close_conn) {
-        std::string response = "HTTP/1.1 " + error_num + " "  + error_msg + "\r\n";
+        std::string response = "HTTP/1.1 " + error_num + " " + error_msg + "\r\n";
         if (close_conn)
             response += "Connection: close\r\n\r\n";
 
@@ -104,16 +107,18 @@ namespace {
                 end_connection = IMMEDIATE;
                 break;
             }
+
             seen_fields.insert(line_tokens[0]);
             if (line_tokens[0] == "connection:" && line_tokens[1] == "close")
                 end_connection = AFTER_RESPONSE;
+
             if (line_tokens[0] == "content-length:" && (line_tokens[1] != "0" && line_tokens[1] != "0\r\n")) {
                 if (send_error(msg_sock, "non_empty_message_body", "400", true) != 0)
                     return EXIT_FAILURE;
                 end_connection = IMMEDIATE;
                 break;
             }
-            // TODO moze "server" daje error, moze tez content-type
+            // TODO moze "server" daje error, moze tez "content-type"
         }
         return 0;
     }
@@ -135,7 +140,6 @@ int main(int argc, char *argv[]) {
     fs::path path_to_dir = argv[1];
     fs::path path_to_servers_file = argv[2];
 
-    //fs::current_path("/cygdrive/c/Users/Adrian/CLionProjects/SiK/");    // tymczasowe
 
     if (!fs::exists(path_to_dir) || !fs::exists(path_to_servers_file))
         return EXIT_FAILURE;
@@ -145,7 +149,7 @@ int main(int argc, char *argv[]) {
 
     std::ifstream servers_file(path_to_servers_file);
     std::string servers_line;
-    std::vector<correlated_resource> correlated_resources;  // lepiej set sortowany po zasobie ale nie trzeba
+    std::vector<correlated_resource> correlated_resources;
 
     if (servers_file.is_open()) {
         std::string path, ip, port;
@@ -155,8 +159,7 @@ int main(int argc, char *argv[]) {
             correlated_resources.emplace_back(path, ip, port);
         }
         servers_file.close();
-    }
-    else
+    } else
         return EXIT_FAILURE;
 
     for (correlated_resource &r : correlated_resources)
@@ -210,32 +213,31 @@ int main(int argc, char *argv[]) {
             }
                 // if len == 0 to koniec połączenia
             else if (len > 0) {
+                int end_connection = false;
                 std::string buf_str(receive_buffer, len);
+                while (end_connection == false) {
+                    std::string line = my_getline(buf_str);
+                    if (line.empty())
+                        break;
 
-                std::string line = my_getline(buf_str);
-                //  przerobić wczytane w pełni linie, jeżeli to zarazem koniec komunikatu i received to git
-                // jak koniec komunikatu ale nie received to lecimy kolejny komunikat
-                // jak koniec received ale nie komunikatu to doczytujemy i kończymy przerabiać,
-                // (może nawet urwać w środku stringa więc dokleić czy cuś)
-
-                // czyli wszystko poniżej będzie w pętli
-                if (!std::regex_match(line, request_line_regex)) {
-                    if (send_error(msg_sock, "invalid_request_line", "400", true) != 0)
-                        return EXIT_FAILURE;
-                    break;
-                } else {
+                    // czyli wszystko poniżej będzie w pętli
+                    if (!std::regex_match(line, request_line_regex)) {
+                        if (send_error(msg_sock, "invalid_request_line", "400", true) != 0)
+                            return EXIT_FAILURE;
+                        break;
+                    }
                     std::cout << "GIT: " << line;
                     std::vector<std::string> line_tokens = tokenize_string(line, ' ');
 
                     if (line_tokens[0] != "GET" && line_tokens[0] != "HEAD") {
                         if (send_error(msg_sock, "unsupported_method", "501", false) != 0)
                             return EXIT_FAILURE;
+                        continue;
                     }
-                    int end_connection = false;
                     bool method = HEAD;
                     if (line_tokens[0] == "GET")
                         method = GET;
-                    //fs::path file(line_tokens[1]);
+
                     std::string filestr(line_tokens[1]);
                     // mamy metodę i nazwę pliku, teraz czytamy headery
                     if (handle_headers(buf_str, msg_sock, end_connection) != 0)
@@ -246,59 +248,60 @@ int main(int argc, char *argv[]) {
 
                     std::cout << "GICIK PO HEADERACH\n";
                     fs::path file(path_to_dir.string() + filestr);
-                    // sprawdzamy czy nie ma przypadkiem message body
-
-                    //std::cout << file << std::endl;
 
                     if (!fs::exists(file)) {
                         file = fs::absolute(file);
-                        //std::cout << file << std::endl;
                         bool found = false;
                         for (correlated_resource &r : correlated_resources) {
                             if (r.path == file) {
                                 found = true;
                                 static const std::string status_line = "HTTP/1.1 302 file_on_other_server\r\n";
-                                std::string headers = "Location: http://" + r.ip + ":" + r.port + r.path + "\r\n\r\n";
+                                std::string headers =
+                                        "Location: http://" + r.ip + ":" + r.port + r.path + "\r\n\r\n";
                                 std::string response = status_line + headers;
-                                snd_len = write(msg_sock, response.c_str(), response.length());
-                                if (snd_len != response.length())
+                                if (write(msg_sock, response.c_str(), response.length()) != response.length())
                                     return EXIT_FAILURE;
-                                break;
+                                continue;
                             }
                         }
                         if (!found) {
                             if (send_error(msg_sock, "file_not_found", "404", false) != 0)
                                 return EXIT_FAILURE;
-                        }
-                    } else {
-                        int fd = open(file.string().c_str(), O_RDONLY);
-                        if (fd < 0) {
-                            send_error(msg_sock, "500", "error_opening_file", false);
-                        } else {
-                            memset(send_buffer, 0, sizeof(send_buffer));
-                            static const std::string status_line_ok = "HTTP/1.1 200 OK\r\n";
-                            const std::string headers = "Content-Length: " + std::to_string(fs::file_size(file))
-                                                        + "\r\nContent-Type: application/octet-stream\r\n\r\n";
-                            const std::string response = status_line_ok + headers;
-                            strcpy(send_buffer, response.c_str());
-
-                            snd_len = read(fd, send_buffer + response.size(), sizeof(send_buffer) - response.size());
-                            snd_len += response.size();
-                            if (write(msg_sock, send_buffer, snd_len) != snd_len)
-                                return EXIT_FAILURE;
-
-                            while (true) {
-                                memset(send_buffer, 0, sizeof(send_buffer));
-                                snd_len = read(fd, send_buffer, sizeof(send_buffer));
-                                if (snd_len == 0)
-                                    break;
-                                if (write(msg_sock, send_buffer, snd_len) != snd_len)
-                                    return EXIT_FAILURE;
-                            }
+                            continue;
                         }
                     }
-                    if (end_connection == AFTER_RESPONSE)
-                        break;
+
+                    int fd = open(file.string().c_str(), O_RDONLY);
+                    if (fd < 0) {
+                        send_error(msg_sock, "500", "error_opening_file", false);
+                        continue;
+                    }
+                    memset(send_buffer, 0, sizeof(send_buffer));
+                    static const std::string status_line_ok = "HTTP/1.1 200 OK\r\n";
+                    const std::string headers = "Content-Length: " + std::to_string(fs::file_size(file))
+                                                + "\r\nContent-Type: application/octet-stream\r\n\r\n";
+                    const std::string response = status_line_ok + headers;
+
+                    if (method == HEAD) {
+                        if (write(msg_sock, response.c_str(), response.length()) != response.length())
+                            return EXIT_FAILURE;
+                    } else {
+                        strcpy(send_buffer, response.c_str());
+                        snd_len = read(fd, send_buffer + response.size(),
+                                       sizeof(send_buffer) - response.size());
+                        snd_len += response.size();
+                        if (write(msg_sock, send_buffer, snd_len) != snd_len)
+                            return EXIT_FAILURE;
+
+                        while (true) {
+                            memset(send_buffer, 0, sizeof(send_buffer));
+                            snd_len = read(fd, send_buffer, sizeof(send_buffer));
+                            if (snd_len == 0)
+                                break;
+                            if (write(msg_sock, send_buffer, snd_len) != snd_len)
+                                return EXIT_FAILURE;
+                        }
+                    }
                 }
             }
 
