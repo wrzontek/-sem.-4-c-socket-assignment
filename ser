@@ -1,0 +1,136 @@
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <errno.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <inttypes.h>
+#include <fcntl.h>
+#include "err.h"
+
+#define LINE_SIZE 100
+#define BUF_SIZE 1024
+
+struct __attribute__((__packed__)) FileInfo {
+  uint32_t file_size;
+  char filename[30];
+};
+static volatile ssize_t total_received = 0;
+
+void *handle_connection (void *s_ptr) {
+  int ret, s;
+  socklen_t len;
+  char buf[BUF_SIZE], peername[LINE_SIZE + 1], peeraddr[LINE_SIZE + 1];
+  struct sockaddr_in addr;
+
+  s = *(int *)s_ptr;
+  free(s_ptr);
+
+  len = sizeof(addr);
+
+  /* KtÃ³Å¼ to do nas dzwoni (adres)?  */
+  ret = getpeername(s, (struct sockaddr *)&addr, &len);
+  if (ret == -1)
+    syserr("getsockname");
+
+  inet_ntop(AF_INET, &addr.sin_addr, peeraddr, LINE_SIZE);
+  snprintf(peername, 2*LINE_SIZE, "%s:%d", peeraddr, ntohs(addr.sin_port));
+
+  //printf("%s connection open (handled by thread %lu, pid is %d)\n",
+  //       peername, (unsigned long)pthread_self(), getpid());
+
+  struct FileInfo file_info;
+  int rflags = MSG_WAITALL;
+
+  ret = recv(s, ((char*)&file_info), sizeof(file_info), rflags);
+  if (ret != sizeof(file_info))
+    syserr("read");
+
+  file_info.file_size = ntohl(file_info.file_size);
+
+  printf("new client %s size=%d file=%s\n", peername, file_info.file_size, file_info.filename);
+  int file = open(file_info.filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  sleep(1);
+  ssize_t received = 0;
+  do {
+    memset(buf, 0, sizeof(buf));
+    ret = read(s, buf, sizeof(buf));
+
+    write(file, buf, ret);
+    received += ret;
+  } while (ret > 0);
+  total_received += received;
+
+  close(file);
+  printf("client %s has sent it's file of size=%ld\n", peername, received);
+  printf("total size of uploaded files: %ld\n", total_received);
+  close(s);
+  return 0;
+}
+
+int main () {
+  int ear, rc;
+  socklen_t len;
+  struct sockaddr_in server;
+
+  /* Tworzymy gniazdko */
+  ear = socket(PF_INET, SOCK_STREAM, 0);
+  if (ear == -1)
+    syserr("socket");
+
+  /* PodÅ‚Ä…czamy do centrali */
+  server.sin_family = AF_INET;
+  server.sin_addr.s_addr = htonl(INADDR_ANY);
+  server.sin_port = 0;
+  rc = bind(ear, (struct sockaddr *)&server, sizeof(server));
+  if (rc == -1)
+    syserr("bind");
+
+
+  /* KaÅ¼dy chce wiedzieÄ‡ jaki to port */
+  len = (socklen_t)sizeof(server);
+  rc = getsockname(ear, (struct sockaddr *)&server, &len);
+  if (rc == -1)
+    syserr("getsockname");
+
+  printf("Listening at port %d\n", (int)ntohs(server.sin_port));
+
+  rc = listen(ear, 5);
+  if (rc == -1)
+    syserr("listen");
+
+  /* No i do pracy */
+  for (;;) {
+    int msgsock;
+    int *con;
+    pthread_t t;
+
+    msgsock = accept(ear, (struct sockaddr *)NULL, NULL);
+    if (msgsock == -1) {
+      syserr("accept");
+    }
+
+    /* Tylko dla tego wÄ…tku */
+    con = malloc(sizeof(int));
+    if (!con) {
+      syserr("malloc");
+    }
+    *con = msgsock;
+
+    rc = pthread_create(&t, 0, handle_connection, con);
+    if (rc == -1) {
+      syserr("pthread_create");
+    }
+
+    /* No przecieÅ¼ nie bÄ™dÄ™ na niego czekaÅ‚ ... */
+    rc = pthread_detach(t);
+    if (rc == -1) {
+      syserr("pthread_detach");
+    }
+  }
+}
+

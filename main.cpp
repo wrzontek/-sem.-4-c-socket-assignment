@@ -1,16 +1,15 @@
 #include <iostream>
 #include <cstdlib>
 #include <filesystem>
-#include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
 #include <fstream>
-#include <utility>
 #include <vector>
 #include <iterator>
 #include <regex>
 #include <set>
+#include <fcntl.h>
 
 namespace fs = std::filesystem;
 
@@ -18,12 +17,6 @@ namespace fs = std::filesystem;
 #define BUFFER_SIZE   2048
 #define QUEUE_LENGTH 5
 
-#define OK 200
-#define OTHER_SERVER 302
-#define INVALID_REQUEST 400
-#define NOT_FOUND 404
-#define SERVER_ERROR 500
-#define UNSUPPORTED_OPERATION 501
 
 #define GET false
 #define HEAD true
@@ -184,7 +177,8 @@ int main(int argc, char *argv[]) {
     struct sockaddr_in client_address;
     socklen_t client_address_len;
 
-    char buffer[BUFFER_SIZE];
+    char receive_buffer[BUFFER_SIZE];
+    char send_buffer[BUFFER_SIZE];
     ssize_t len, snd_len;
 
     sock = socket(PF_INET, SOCK_STREAM, 0); // tworzymy IPv4 TCP socket
@@ -210,13 +204,13 @@ int main(int argc, char *argv[]) {
         if (msg_sock < 0)
             return EXIT_FAILURE;
         do {
-            len = read(msg_sock, buffer, sizeof(buffer));
+            len = read(msg_sock, receive_buffer, sizeof(receive_buffer));
             if (len < 0) {
                 return EXIT_FAILURE;    // moze inny error i wysylamy do typa coś
             }
                 // if len == 0 to koniec połączenia
             else if (len > 0) {
-                std::string buf_str(buffer, len);
+                std::string buf_str(receive_buffer, len);
 
                 std::string line = my_getline(buf_str);
                 //  przerobić wczytane w pełni linie, jeżeli to zarazem koniec komunikatu i received to git
@@ -252,6 +246,8 @@ int main(int argc, char *argv[]) {
 
                     std::cout << "GICIK PO HEADERACH\n";
                     fs::path file(path_to_dir.string() + filestr);
+                    // sprawdzamy czy nie ma przypadkiem message body
+
                     //std::cout << file << std::endl;
 
                     if (!fs::exists(file)) {
@@ -261,7 +257,7 @@ int main(int argc, char *argv[]) {
                         for (correlated_resource &r : correlated_resources) {
                             if (r.path == file) {
                                 found = true;
-                                std::string status_line = "HTTP/1.1 302 file_on_other_server\r\n";
+                                static const std::string status_line = "HTTP/1.1 302 file_on_other_server\r\n";
                                 std::string headers = "Location: http://" + r.ip + ":" + r.port + r.path + "\r\n\r\n";
                                 std::string response = status_line + headers;
                                 snd_len = write(msg_sock, response.c_str(), response.length());
@@ -273,6 +269,25 @@ int main(int argc, char *argv[]) {
                         if (!found) {
                             if (send_error(msg_sock, "file_not_found", "404", false) != 0)
                                 return EXIT_FAILURE;
+                        }
+                    } else {
+                        int fd = open(file.string().c_str(), O_RDONLY);
+                        if (fd < 0) {
+                            send_error(msg_sock, "500", "error_opening_file", false);
+                        } else {
+                            static const std::string status_line_ok = "HTTP/1.1 200 OK\r\n";
+                            const std::string headers = "Content-Length: " + std::to_string(fs::file_size(file))
+                                                        + "Content-Type: application/octet-stream\r\n\r\n";
+                            //ssize_t buffer_space = BUFFER_SIZE - status_line_ok.size() - headers.size();
+                            const std::string response = status_line_ok + headers;
+                            if (write(msg_sock, response.c_str(), response.length()) != response.length())
+                                return EXIT_FAILURE;
+                            do {
+                                memset(send_buffer, 0, sizeof(send_buffer));
+                                snd_len = read(fd, send_buffer, sizeof(send_buffer));
+
+                                write(msg_sock, send_buffer, snd_len);
+                            } while (snd_len > 0);
                         }
                     }
                     if (end_connection == AFTER_RESPONSE)
