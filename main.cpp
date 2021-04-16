@@ -275,19 +275,26 @@ int main(int argc, char *argv[]) {
                         if (fd < 0) {
                             send_error(msg_sock, "500", "error_opening_file", false);
                         } else {
+                            memset(send_buffer, 0, sizeof(send_buffer));
                             static const std::string status_line_ok = "HTTP/1.1 200 OK\r\n";
                             const std::string headers = "Content-Length: " + std::to_string(fs::file_size(file))
-                                                        + "Content-Type: application/octet-stream\r\n\r\n";
-                            //ssize_t buffer_space = BUFFER_SIZE - status_line_ok.size() - headers.size();
+                                                        + "\r\nContent-Type: application/octet-stream\r\n\r\n";
                             const std::string response = status_line_ok + headers;
-                            if (write(msg_sock, response.c_str(), response.length()) != response.length())
+                            strcpy(send_buffer, response.c_str());
+
+                            snd_len = read(fd, send_buffer + response.size(), sizeof(send_buffer) - response.size());
+                            snd_len += response.size();
+                            if (write(msg_sock, send_buffer, snd_len) != snd_len)
                                 return EXIT_FAILURE;
-                            do {
+
+                            while (true) {
                                 memset(send_buffer, 0, sizeof(send_buffer));
                                 snd_len = read(fd, send_buffer, sizeof(send_buffer));
-
-                                write(msg_sock, send_buffer, snd_len);
-                            } while (snd_len > 0);
+                                if (snd_len == 0)
+                                    break;
+                                if (write(msg_sock, send_buffer, snd_len) != snd_len)
+                                    return EXIT_FAILURE;
+                            }
                         }
                     }
                     if (end_connection == AFTER_RESPONSE)
