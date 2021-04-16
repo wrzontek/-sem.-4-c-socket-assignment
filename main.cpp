@@ -209,12 +209,13 @@ int main(int argc, char *argv[]) {
         do {
             len = read(msg_sock, receive_buffer, sizeof(receive_buffer));
             if (len < 0) {
-                return EXIT_FAILURE;    // moze inny error i wysylamy do typa coś
+                return EXIT_FAILURE;
             }
-                // if len == 0 to koniec połączenia
+            // if len == 0 to koniec połączenia
             else if (len > 0) {
                 int end_connection = false;
                 std::string buf_str(receive_buffer, len);
+
                 while (end_connection == false) {
                     std::string line = my_getline(buf_str);
                     if (line.empty())
@@ -276,6 +277,7 @@ int main(int argc, char *argv[]) {
                         send_error(msg_sock, "500", "error_opening_file", false);
                         continue;
                     }
+
                     memset(send_buffer, 0, sizeof(send_buffer));
                     static const std::string status_line_ok = "HTTP/1.1 200 OK\r\n";
                     const std::string headers = "Content-Length: " + std::to_string(fs::file_size(file))
@@ -290,14 +292,16 @@ int main(int argc, char *argv[]) {
                         snd_len = read(fd, send_buffer + response.size(),
                                        sizeof(send_buffer) - response.size());
                         snd_len += response.size();
+
                         if (write(msg_sock, send_buffer, snd_len) != snd_len)
                             return EXIT_FAILURE;
 
-                        while (true) {
+                        while (true) {  // wysyłanie reszty pliku jak pierwszy write nie wystarczył
                             memset(send_buffer, 0, sizeof(send_buffer));
                             snd_len = read(fd, send_buffer, sizeof(send_buffer));
                             if (snd_len == 0)
                                 break;
+
                             if (write(msg_sock, send_buffer, snd_len) != snd_len)
                                 return EXIT_FAILURE;
                         }
