@@ -60,6 +60,7 @@ namespace {
         }
         std::string line = buf_str.substr(0, pos + 2);
         buf_str.erase(0, pos + 2);
+        std::cout << "gotline:" << line;
         return line;
     }
 
@@ -218,6 +219,7 @@ int main(int argc, char *argv[]) {
 
                 while (end_connection == false) {
                     std::string line = my_getline(buf_str);
+                    std::cout << "line:" << line;
                     if (line.empty())
                         break;
 
