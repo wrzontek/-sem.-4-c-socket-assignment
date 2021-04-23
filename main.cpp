@@ -1,12 +1,10 @@
 #include <iostream>
-#include <cstdlib>
 #include <filesystem>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
 #include <fstream>
 #include <vector>
-#include <iterator>
 #include <regex>
 #include <set>
 #include <fcntl.h>
@@ -16,7 +14,6 @@ namespace fs = std::filesystem;
 #define DEFAULT_PORT 8080
 #define BUFFER_SIZE   2048
 #define QUEUE_LENGTH 5
-
 
 #define GET false
 #define HEAD true
@@ -38,6 +35,22 @@ namespace {
         std::string port;
     };
 
+    bool get_correlated_resources(fs::path &path_to_servers_file, std::vector<correlated_resource> &correlated_resources) {
+        std::ifstream servers_file(path_to_servers_file);
+        std::string servers_line;
+        if (servers_file.is_open()) {
+            std::string path, ip, port;
+            while (getline(servers_file, servers_line)) {
+                std::stringstream ss = std::stringstream(servers_line);
+                ss >> path >> ip >> port;
+                correlated_resources.emplace_back(path, ip, port);
+            }
+            servers_file.close();
+            return 0;
+        } else
+            return EXIT_FAILURE;
+    }
+
     std::vector<std::string> tokenize_string(const std::string &s, const char delimeter) {
         std::vector<std::string> tokens;
         std::string token;
@@ -49,30 +62,31 @@ namespace {
         return tokens;
     }
 
-    std::string my_getline(std::string &buf_str) {
+    std::string my_getline(std::string &buf_str, int msg_sock, char *receive_buffer) {
         if (buf_str.empty())
             return buf_str;
 
         std::size_t pos = buf_str.find("\r\n");
         if (pos == std::string::npos) {
+            // nie znaleziono \r\n, trzeba doczytać
             std::cout << "nie ma \\r\\n !\n";
-            // trzeba doczytać bądź jest zły input
-        }
-        std::string line = buf_str.substr(0, pos + 2);
-        buf_str.erase(0, pos + 2);
-        std::cout << "gotline:" << line;
-        return line;
-    }
+            memset(receive_buffer, 0, BUFFER_SIZE);
+            ssize_t len = read(msg_sock, receive_buffer, sizeof(receive_buffer));
+            if (len < 0)
+                return buf_str; // TODO ERROR
+            if (len == 0)
+                return buf_str;
 
-/*    std::string my_peek_line(std::string &buf_str) {
-        std::size_t pos = buf_str.find("\r\n");
-        if (pos == std::string::npos) {
-            std::cout << "nie ma \\r\\n !\n";
-            // TODO trzeba doczytać bądź jest zły input
+            buf_str += std::string(receive_buffer, len);    // dodajemy do bufora nowo wczytaną porcję
+            return my_getline(buf_str, msg_sock, receive_buffer);
         }
-        std::string line = buf_str.substr(0, pos + 2);
-        return line;
-    }*/
+        else {
+            std::string line = buf_str.substr(0, pos + 2);
+            buf_str.erase(0, pos + 2);
+            std::cout << "gotline:" << line;
+            return line;
+        }
+    }
 
     bool send_error(int msg_sock, std::string error_msg, std::string error_num, bool close_conn) {
         std::string response = "HTTP/1.1 " + error_num + " " + error_msg + "\r\n";
@@ -85,11 +99,11 @@ namespace {
         return 0;
     }
 
-    bool handle_headers(std::string &buf_str, int msg_sock, int &end_connection) {
+    bool handle_headers(std::string &buf_str, int msg_sock, int &end_connection, char *receive_buffer) {
         std::set<std::string> seen_fields;
 
         while (true) {
-            std::string line = my_getline(buf_str);
+            std::string line = my_getline(buf_str, msg_sock, receive_buffer);
             if (line == "\r\n")
                 break;  // koniec headerów
             if (!std::regex_match(line, header_field_regex)) {
@@ -125,9 +139,6 @@ namespace {
     }
 }
 
-//for (const auto & entry : fs::directory_iterator(fs::current_path()))
-//    std::cout << entry.path() << std::endl;
-
 int main(int argc, char *argv[]) {
     if (argc < 3 || argc > 4)
         return EXIT_FAILURE;
@@ -141,40 +152,14 @@ int main(int argc, char *argv[]) {
     fs::path path_to_dir = argv[1];
     fs::path path_to_servers_file = argv[2];
 
-
     if (!fs::exists(path_to_dir) || !fs::exists(path_to_servers_file))
         return EXIT_FAILURE;
 
     path_to_dir = fs::absolute(path_to_dir);
-    std::cout << path_to_dir << std::endl;
 
-    std::ifstream servers_file(path_to_servers_file);
-    std::string servers_line;
     std::vector<correlated_resource> correlated_resources;
-
-    if (servers_file.is_open()) {
-        std::string path, ip, port;
-        while (getline(servers_file, servers_line)) {
-            std::stringstream ss = std::stringstream(servers_line);
-            ss >> path >> ip >> port;
-            correlated_resources.emplace_back(path, ip, port);
-        }
-        servers_file.close();
-    } else
+    if (get_correlated_resources(path_to_servers_file, correlated_resources) != 0)
         return EXIT_FAILURE;
-
-    for (correlated_resource &r : correlated_resources)
-        std::cout << "path: " << r.path << " ip: " << r.ip << " port: " << r.port << std::endl;
-
-    printf("my port: %d\n", my_port);
-
-
-    std::string test1("GET /plik HTTP/1.1\r\n");
-    std::string test2("Connection: close\r\n");
-    if (std::regex_match(test1, request_line_regex))
-        std::cout << "match 1\n";
-    if (std::regex_match(test2, header_field_regex))
-        std::cout << "match 2\n";
 
     int sock, msg_sock;
     struct sockaddr_in server_address;
@@ -207,7 +192,14 @@ int main(int argc, char *argv[]) {
         msg_sock = accept(sock, (struct sockaddr *) &client_address, &client_address_len);
         if (msg_sock < 0)
             return EXIT_FAILURE;
+
+        struct timeval tv;
+        tv.tv_sec = 5;
+        tv.tv_usec = 0;
+        setsockopt(msg_sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
+
         do {
+            memset(receive_buffer, 0, BUFFER_SIZE);
             len = read(msg_sock, receive_buffer, sizeof(receive_buffer));
             if (len < 0) {
                 return EXIT_FAILURE;
@@ -218,12 +210,11 @@ int main(int argc, char *argv[]) {
                 std::string buf_str(receive_buffer, len);
 
                 while (end_connection == false) {
-                    std::string line = my_getline(buf_str);
+                    std::string line = my_getline(buf_str, msg_sock, receive_buffer);
                     std::cout << "line:" << line;
                     if (line.empty())
                         break;
 
-                    // czyli wszystko poniżej będzie w pętli
                     if (!std::regex_match(line, request_line_regex)) {
                         if (send_error(msg_sock, "invalid_request_line", "400", true) != 0)
                             return EXIT_FAILURE;
@@ -233,9 +224,9 @@ int main(int argc, char *argv[]) {
                     std::vector<std::string> line_tokens = tokenize_string(line, ' ');
 
                     if (line_tokens[0] != "GET" && line_tokens[0] != "HEAD") {
-                        if (send_error(msg_sock, "unsupported_method", "501", false) != 0)
+                        if (send_error(msg_sock, "unsupported_method", "501", true) != 0)
                             return EXIT_FAILURE;
-                        continue;
+                        break;
                     }
                     bool method = HEAD;
                     if (line_tokens[0] == "GET")
@@ -243,13 +234,12 @@ int main(int argc, char *argv[]) {
 
                     std::string filestr(line_tokens[1]);
                     // mamy metodę i nazwę pliku, teraz czytamy headery
-                    if (handle_headers(buf_str, msg_sock, end_connection) != 0)
+                    if (handle_headers(buf_str, msg_sock, end_connection, receive_buffer) != 0)
                         return EXIT_FAILURE;
 
                     if (end_connection == IMMEDIATE)
                         break;
 
-                    std::cout << "GICIK PO HEADERACH\n";
                     fs::path file(path_to_dir.string() + filestr);
 
                     if (!fs::exists(file)) {
