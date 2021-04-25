@@ -12,7 +12,7 @@
 namespace fs = std::filesystem;
 
 #define DEFAULT_PORT 8080
-#define BUFFER_SIZE   2048
+#define BUFFER_SIZE   4096
 #define QUEUE_LENGTH 5
 
 #define GET false
@@ -22,7 +22,7 @@ namespace fs = std::filesystem;
 #define AFTER_RESPONSE 2
 
 namespace {
-    static const std::regex request_line_regex(R"(\w+ /[a-zA-Z0-9.-/]+ (HTTP\/1.1)\r\n)");
+    static const std::regex request_line_regex(R"(\w+ \/[a-zA-Z0-9./-]* (HTTP\/1.1)\r\n)");
 
     static const std::regex header_field_regex(R"([a-zA-Z0-9.-/-]+: *[a-zA-Z0-9.-/-]+ *\r\n)");
 
@@ -92,6 +92,8 @@ namespace {
         std::string response = "HTTP/1.1 " + error_num + " " + error_msg + "\r\n";
         if (close_conn)
             response += "Connection: close\r\n\r\n";
+        else
+            response += "\r\n";
 
         ssize_t snd_len = write(msg_sock, response.c_str(), response.length());
         if (snd_len != response.length())
@@ -116,14 +118,16 @@ namespace {
                            [](unsigned char c) { return std::tolower(c); });
 
             std::vector<std::string> line_tokens = tokenize_string(line, ' ');
-            if (seen_fields.find(line_tokens[0]) != seen_fields.end()) {
-                if (send_error(msg_sock, "repeat_field_name", "400", true) != 0)
-                    return EXIT_FAILURE;
-                end_connection = IMMEDIATE;
-                break;
-            }
+            if (line_tokens[0] == "connection:" || line_tokens[0] == "content-length:") {
+                if (seen_fields.find(line_tokens[0]) != seen_fields.end()) {
+                    if (send_error(msg_sock, "repeat_field_name", "400", true) != 0)
+                        return EXIT_FAILURE;
+                    end_connection = IMMEDIATE;
+                    break;
+                }
 
-            seen_fields.insert(line_tokens[0]);
+                seen_fields.insert(line_tokens[0]);
+            }
             if (line_tokens[0] == "connection:" && line_tokens[1] == "close")
                 end_connection = AFTER_RESPONSE;
 
@@ -133,7 +137,6 @@ namespace {
                 end_connection = IMMEDIATE;
                 break;
             }
-            // TODO moze "server" daje error, moze tez "content-type"
         }
         return 0;
     }
@@ -204,7 +207,7 @@ int main(int argc, char *argv[]) {
             if (len < 0) {
                 return EXIT_FAILURE;
             }
-            // if len == 0 to koniec połączenia
+                // if len == 0 to koniec połączenia
             else if (len > 0) {
                 int end_connection = false;
                 std::string buf_str(receive_buffer, len);
@@ -240,18 +243,26 @@ int main(int argc, char *argv[]) {
                     if (end_connection == IMMEDIATE)
                         break;
 
+                    if (filestr == "/" || filestr.substr(1, 2) == "..") {
+                        if (send_error(msg_sock, "file_not_found", "404", false) != 0)
+                            return EXIT_FAILURE;
+                        continue;
+                    }
+
                     fs::path file(path_to_dir.string() + filestr);
 
                     if (!fs::exists(file)) {
-                        file = fs::absolute(file);
+                        file = fs::path(filestr);
                         bool found = false;
                         for (correlated_resource &r : correlated_resources) {
                             if (r.path == file) {
                                 found = true;
                                 static const std::string status_line = "HTTP/1.1 302 file_on_other_server\r\n";
                                 std::string headers =
-                                        "Location: http://" + r.ip + ":" + r.port + r.path + "\r\n\r\n";
+                                        "location: http://" + r.ip + ":" + r.port + r.path +
+                                        "\r\nContent-Length: 0\r\n\r\n";
                                 std::string response = status_line + headers;
+                                std::cout << response;
                                 if (write(msg_sock, response.c_str(), response.length()) != response.length())
                                     return EXIT_FAILURE;
                                 continue;
@@ -298,6 +309,7 @@ int main(int argc, char *argv[]) {
                                 return EXIT_FAILURE;
                         }
                     }
+                    std::cout << response;
                 }
             }
 
